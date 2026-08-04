@@ -1,0 +1,7 @@
+<RCC>
+    <qresource prefix="/">
+        <file>style.qss</file>
+        <file>style-dark.qss</file>
+        <file>images/world-generator-icon.png</file>
+    </qresource>
+</RCC>

@@ -1,0 +1,262 @@
+/* 地图生成器界面样式表(QSS)—— 深色模式
+ * 配色源自苹果设计系统 dark 主题:
+ *   背景 #000000、卡片 #1c1c1e、边框 #3a3a3c、文字 #f5f5f7
+ *   主色 #0a84ff(dark System Blue)、日志面板更深的 #000000
+ * 注:复选框指示器保持原生 */
+
+/* ===== 全局基调 ===== */
+QWidget {
+    background: #000000;
+    color: #f5f5f7;
+    font-family: "SF Pro Text", "PingFang SC", "Helvetica Neue", "Microsoft YaHei", Arial, sans-serif;
+    font-size: 13px;
+}
+QMainWindow, QScrollArea {
+    background: #000000;
+}
+QToolTip {
+    background: #3a3a3c;
+    color: #f5f5f7;
+    border: none;
+    border-radius: 6px;
+    padding: 5px 8px;
+}
+
+/* ===== 顶部标题 ===== */
+QLabel#headerTitle {
+    background: transparent;
+    color: #f5f5f7;
+    font-size: 19px;
+    font-weight: 700;
+}
+QLabel#headerSubtitle {
+    background: transparent;
+    color: #8e8e93;
+    font-size: 12px;
+}
+
+/* ===== 参数卡片 QGroupBox ===== */
+QGroupBox {
+    background: #1c1c1e;
+    border: 1px solid #3a3a3c;
+    border-radius: 14px;
+    margin-top: 18px;
+    padding: 20px 14px 14px 14px;
+    font-size: 13px;
+}
+QGroupBox::title {
+    subcontrol-origin: margin;
+    subcontrol-position: top left;
+    left: 16px;
+    padding: 0 6px;
+    color: #f5f5f7;
+    font-size: 13px;
+    font-weight: 700;
+    background: #000000;
+}
+
+/* ===== 标签 ===== */
+QLabel {
+    background: transparent;
+    color: #8e8e93;
+    font-size: 12px;
+}
+QLabel#mapLabel {
+    color: #6e6e73;
+    font-size: 15px;
+}
+
+/* ===== 输入控件 ===== */
+QSpinBox, QLineEdit {
+    background: #1c1c1e;
+    border: 1px solid #3a3a3c;
+    border-radius: 8px;
+    padding: 5px 8px;
+    color: #f5f5f7;
+    selection-background-color: #0a84ff;
+    selection-color: #ffffff;
+    min-height: 20px;
+}
+QSpinBox:hover, QLineEdit:hover {
+    border-color: #48484a;
+}
+QSpinBox:focus, QLineEdit:focus {
+    border: 1px solid #0a84ff;
+}
+QSpinBox:disabled, QLineEdit:disabled {
+    background: #2c2c2e;
+    color: #6e6e73;
+}
+
+/* 微调按钮:用边框三角绘制箭头,无需图片资源 */
+QSpinBox::up-button, QSpinBox::down-button {
+    width: 18px;
+    border: none;
+    border-left: 1px solid #3a3a3c;
+    background: transparent;
+}
+QSpinBox::up-button:hover, QSpinBox::down-button:hover {
+    background: #2c2c2e;
+    border-top-right-radius: 8px;
+}
+QSpinBox::down-button:hover {
+    border-top-right-radius: 0;
+    border-bottom-right-radius: 8px;
+}
+QSpinBox::up-arrow {
+    image: none;
+    width: 0;
+    height: 0;
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+    border-bottom: 5px solid #8e8e93;
+}
+QSpinBox::down-arrow {
+    image: none;
+    width: 0;
+    height: 0;
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+    border-top: 5px solid #8e8e93;
+}
+QSpinBox::up-button:disabled, QSpinBox::down-button:disabled {
+    background: transparent;
+}
+QSpinBox::up-arrow:disabled, QSpinBox::down-arrow:disabled {
+    border-bottom-color: #48484a;
+    border-top-color: #48484a;
+}
+
+/* ===== 复选框(指示器保持原生) ===== */
+QCheckBox {
+    background: transparent;
+    color: #f5f5f7;
+    spacing: 8px;
+    font-size: 13px;
+    padding: 3px 0;
+}
+
+/* ===== 按钮 ===== */
+QPushButton {
+    background: #1c1c1e;
+    border: 1px solid #3a3a3c;
+    border-radius: 9px;
+    padding: 7px 16px;
+    color: #f5f5f7;
+    font-size: 13px;
+}
+QPushButton:hover {
+    background: #2c2c2e;
+}
+QPushButton:pressed {
+    background: #48484a;
+}
+QPushButton:disabled {
+    color: #6e6e73;
+    background: #1c1c1e;
+    border-color: #2c2c2e;
+}
+
+/* 主按钮(生成地图) */
+QPushButton#primaryBtn {
+    background: #0a84ff;
+    border: none;
+    border-radius: 10px;
+    color: #ffffff;
+    font-weight: 600;
+    font-size: 14px;
+    padding: 11px 16px;
+}
+QPushButton#primaryBtn:hover {
+    background: #007aff;
+}
+QPushButton#primaryBtn:pressed {
+    background: #0064d6;
+}
+QPushButton#primaryBtn:disabled {
+    background: #003b82;
+    color: #8e8e93;
+}
+
+/* 主题切换按钮 */
+QPushButton#themeBtn {
+    background: #1c1c1e;
+    border: 1px solid #3a3a3c;
+    border-radius: 8px;
+    padding: 6px 12px;
+    color: #f5f5f7;
+    font-size: 12px;
+}
+QPushButton#themeBtn:hover {
+    background: #2c2c2e;
+}
+QPushButton#themeBtn:pressed {
+    background: #48484a;
+}
+
+/* ===== 地图预览卡片 ===== */
+QScrollArea#previewScroll {
+    background: #1c1c1e;
+    border: 1px solid #3a3a3c;
+    border-radius: 14px;
+}
+
+/* ===== 滚动条 ===== */
+QScrollBar:vertical {
+    background: transparent;
+    width: 10px;
+    margin: 3px;
+}
+QScrollBar::handle:vertical {
+    background: #3a3a3c;
+    border-radius: 4px;
+    min-height: 30px;
+}
+QScrollBar::handle:vertical:hover {
+    background: #6e6e73;
+}
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+    height: 0;
+}
+QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
+    background: transparent;
+}
+QScrollBar:horizontal {
+    background: transparent;
+    height: 10px;
+    margin: 3px;
+}
+QScrollBar::handle:horizontal {
+    background: #3a3a3c;
+    border-radius: 4px;
+    min-width: 30px;
+}
+QScrollBar::handle:horizontal:hover {
+    background: #6e6e73;
+}
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
+    width: 0;
+}
+QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {
+    background: transparent;
+}
+
+/* ===== 日志面板(更深控制台) ===== */
+QPlainTextEdit#logView {
+    background: #000000;
+    color: #e3e3e8;
+    border: 1px solid #2c2c2e;
+    border-radius: 10px;
+    padding: 10px 12px;
+    font-family: "SF Mono", "Menlo", "Consolas", "JetBrains Mono", monospace;
+    font-size: 12px;
+    selection-background-color: #3a3a3c;
+    selection-color: #f5f5f7;
+}
+QPlainTextEdit#logView QScrollBar::handle:vertical {
+    background: #2c2c2e;
+    border-radius: 4px;
+}
+QPlainTextEdit#logView QScrollBar::handle:vertical:hover {
+    background: #48484a;
+}

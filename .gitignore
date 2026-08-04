@@ -1,0 +1,8 @@
+build-*/
+*.o
+*.obj
+*.app
+*.dmg
+*.AppImage
+*.exe
+build/
