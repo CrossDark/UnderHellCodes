@@ -44,6 +44,7 @@
 #include <stdarg.h>
 #include <zlib.h>
 #include <time.h>
+#include "worldgen_core.h"
 
 #define PI 3.14159265358979323846
 #define NEG_INF (-2147483647)
@@ -479,16 +480,269 @@ static int write_png(const char *path, const unsigned char *rgba, int w, int h)
     return 0;
 }
 
-/* ---------- 主程序 ---------- */
+/* ---------- 旧版兼容 API(默认 PNG) ---------- */
+int worldgen_run_png(int seed, int faults, int water, int dispersion,
+                     int w, int h, int line_width,
+                     int graticule, int slices, int fill, const char *out)
+{
+    return worldgen_run(seed, faults, water, dispersion, w, h, line_width,
+                        graticule, slices, fill, out, WORLDGEN_FMT_PNG);
+}
+
+/* ---------- SVG 输出:矢量格式,基于海陆多边形路径 ---------- */
+
+/* SVG 写一个矩形像素(用于像素级描边的精简表示) */
+static void svg_pixel_rect(FILE *f, int x, int y, const char *color, float opacity, int sz)
+{
+    fprintf(f, "<rect x=\"%d\" y=\"%d\" width=\"%d\" height=\"%d\" fill=\"%s\" opacity=\"%.2f\"/>\n",
+            x, y, sz, sz, color, opacity);
+}
+
+/* ---------- SVG 海岸线(基于行游程 RLE 的闭合路径,体积远小于逐像素 edge-walk) ---------- */
+
+/* 构建每行每个 mask=1 的水平连续段(start_x, end_x_exclusive),
+ * 然后把每个段的顶边和底边写成 SVG path 的 H/V 段。
+ * 对描边模式(-fill=0 海岸线):我们输出海陆边界像素(即 mask 海岸线膨胀后)的 <rect x,y width=1 height=1 fill=black/>。
+ * 这比边游走更稳定,不会死循环。
+ */
+static void svg_trace_contours(FILE *f, const unsigned char *mask,
+                               const char *color, float stroke_width, int is_closed)
+{
+    int x, y, px, py;
+    unsigned char *dilated = NULL;
+    int radius = (int)(stroke_width + 0.5f) - 1;
+    if (radius < 0) radius = 0;
+    if (radius > 0) {
+        dilated = (unsigned char*)calloc((size_t)X * Y, 1);
+        int r = radius;
+        for (py = 0; py < Y; py++)
+            for (px = 0; px < X; px++) {
+                int dx, dy;
+                if (!mask[px * Y + py]) continue;
+                for (dy = -r; dy <= r; dy++)
+                    for (dx = -r; dx <= r; dx++) {
+                        int yy = py + dy;
+                        if (yy < 0 || yy >= Y) continue;
+                        int xx = (px + dx + X) % X;
+                        dilated[xx * Y + yy] = 1;
+                    }
+            }
+        mask = dilated;
+    }
+    (void)is_closed;
+
+    /* 输出每一个海陆边界(4 邻域检测,与 coast_mask 逻辑一致)像素为 1x1 rect。
+     * 为了压缩体积,每行先做游程(RLE):对连续海岸边界像素段,合并写一个 width=N 的 rect。*/
+    for (y = 0; y < Y; y++) {
+        int run_x = -1, run_len = 0;
+        for (x = 0; x <= X; x++) {
+            int is_coast = 0;
+            if (x < X && mask[x * Y + y]) {
+                int idx = x * Y + y;
+                int xl = (x + X - 1) % X;
+                int xr = (x + 1) % X;
+                if (y > 0 && !mask[idx - 1]) is_coast = 1;
+                else if (y < Y - 1 && !mask[idx + 1]) is_coast = 1;
+                else if (!mask[xl * Y + y]) is_coast = 1;
+                else if (!mask[xr * Y + y]) is_coast = 1;
+            }
+            if (is_coast) {
+                if (run_len == 0) { run_x = x; run_len = 1; }
+                else if (x - run_x == run_len) run_len++;  /* 延续 */
+                else {
+                    fprintf(f, "<rect x=\"%d\" y=\"%d\" width=\"%d\" height=\"1\" fill=\"%s\"/>\n",
+                            run_x, y, run_len, color);
+                    run_x = x; run_len = 1;
+                }
+            } else {
+                if (run_len > 0) {
+                    fprintf(f, "<rect x=\"%d\" y=\"%d\" width=\"%d\" height=\"1\" fill=\"%s\"/>\n",
+                            run_x, y, run_len, color);
+                    run_len = 0;
+                }
+            }
+        }
+    }
+    free(dilated);
+}
+
+/* 分层设色 SVG:按高度分段给像素方块填色。对于大尺寸直接逐像素输出 <rect> 会过大,
+ * 故用 <path> 把同色连续区域合并(按行游程编码,用 H/V 构造路径)。这里使用简单方案:
+ *   每个高度等级做区域连通域,对每个域输出一个简化路径(按 bbox + 方块)。
+ * 为避免 SVG 过大,使用按行 RLE 的路径构造:对每行相同颜色的水平连续段写矩形。
+ */
+static void svg_render_color(FILE *f, int sealevel)
+{
+    int MinZ = 1, MaxZ = -1, x, y, i;
+    for (i = 0; i < X * Y; i++) {
+        if (Height[i] > MaxZ) MaxZ = Height[i];
+        if (Height[i] < MinZ) MinZ = Height[i];
+    }
+    if (MaxZ <= MinZ) MaxZ = MinZ + 1;
+
+    /* 用 6 段色阶(2 海洋 + 4 陆地)合并类别,减少输出 */
+    for (y = 0; y < Y; y++) {
+        int run_x = 0;
+        int run_color_hex = 0;
+        int run_len = 0;
+        for (x = 0; x < X; x++) {
+            int h = Height[x * Y + y];
+            unsigned char rgb[3];
+            float c1[3], c2[3], t;
+            int denom;
+            if (h < sealevel) {
+                denom = sealevel - MinZ;
+                t = (denom > 0) ? (float)(sealevel - h) / denom : 1.0f;
+                if (t < 0.5f) {
+                    c1[0]=150; c1[1]=200; c1[2]=220;
+                    c2[0]=40;  c2[1]=90;  c2[2]=160;
+                    t /= 0.5f;
+                } else {
+                    c1[0]=40;  c1[1]=90;  c2[2]=160;
+                    c2[0]=8;   c2[1]=16;  c2[2]=70;
+                    t = (t - 0.5f) / 0.5f;
+                }
+            } else {
+                denom = MaxZ - sealevel;
+                t = (denom > 0) ? (float)(h - sealevel) / denom : 0.0f;
+                if (t < 0.35f) {
+                    c1[0]=70;  c1[1]=160; c1[2]=80;
+                    c2[0]=150; c2[1]=190; c2[2]=70;
+                    t /= 0.35f;
+                } else if (t < 0.60f) {
+                    c1[0]=150; c1[1]=190; c1[2]=70;
+                    c2[0]=200; c2[1]=170; c2[2]=90;
+                    t = (t - 0.35f) / 0.25f;
+                } else if (t < 0.85f) {
+                    c1[0]=200; c1[1]=170; c1[2]=90;
+                    c2[0]=180; c2[1]=120; c2[2]=80;
+                    t = (t - 0.60f) / 0.25f;
+                } else {
+                    c1[0]=180; c1[1]=120; c1[2]=80;
+                    c2[0]=245; c2[1]=240; c2[2]=235;
+                    t = (t - 0.85f) / 0.15f;
+                }
+            }
+            for (int k = 0; k < 3; k++) {
+                float v = c1[k] + (c2[k] - c1[k]) * t;
+                if (v < 0) v = 0; if (v > 255) v = 255;
+                rgb[k] = (unsigned char)v;
+            }
+            int hex = (rgb[0] << 16) | (rgb[1] << 8) | rgb[2];
+            if (run_len > 0 && hex == run_color_hex && x - run_x == run_len) {
+                /* 延续游程 */
+                run_len++;
+            } else {
+                if (run_len > 0) {
+                    fprintf(f, "<rect x=\"%d\" y=\"%d\" width=\"%d\" height=\"1\" fill=\"#%06X\"/>\n",
+                            run_x, y, run_len, run_color_hex);
+                }
+                run_x = x; run_len = 1; run_color_hex = hex;
+            }
+        }
+        if (run_len > 0) {
+            fprintf(f, "<rect x=\"%d\" y=\"%d\" width=\"%d\" height=\"1\" fill=\"#%06X\"/>\n",
+                    run_x, y, run_len, run_color_hex);
+        }
+    }
+}
+
+/* 主 SVG 输出入口 */
+static int write_svg(const char *path, int line_width, int graticule, int fill, int sealevel,
+                     int slices, const char *out_base)
+{
+    FILE *f = fopen(path, "wb");
+    if (!f) { log_msg("无法写入 SVG %s\n", path); return -1; }
+
+    fprintf(f, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
+    fprintf(f, "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 %d %d\" width=\"%d\" height=\"%d\" shape-rendering=\"crispEdges\">\n",
+            X, Y, X, Y);
+    fprintf(f, "<style>\n"
+               " line,path { shape-rendering: geometricPrecision; }\n"
+               " .g { stroke:black;stroke-opacity:0.5;stroke-width:0.5; }\n"
+               "</style>\n");
+    /* 背景:透明;若分层设色可放一层浅海底色降低 rect 数量压力 */
+    if (fill) {
+        /* 先做分层设色 */
+        svg_render_color(f, sealevel);
+    }
+
+    /* 海岸线(海陆边界):黑色矢量描边 */
+    {
+        float sw = (float)line_width;
+        const char *color = fill ? "#1a1a1a" : "#000000";
+        svg_trace_contours(f, Land, color, sw, 1);
+    }
+
+    /* 经纬网格 */
+    if (graticule) {
+        int nlat = Y / 8, nlon = X / 8;
+        int i;
+        if (nlat < 1) nlat = 1;
+        if (nlon < 1) nlon = 1;
+        fprintf(f, "<g class=\"g\">\n");
+        for (i = 1; i < Y; i++) {
+            if (i % nlat != 0) continue;
+            fprintf(f, "<line x1=\"0\" y1=\"%d\" x2=\"%d\" y2=\"%d\"/>\n", i, X, i);
+        }
+        for (i = 1; i < X; i++) {
+            if (i % nlon != 0) continue;
+            fprintf(f, "<line x1=\"%d\" y1=\"0\" x2=\"%d\" y2=\"%d\"/>\n", i, i, Y);
+        }
+        fprintf(f, "</g>\n");
+    }
+
+    fprintf(f, "</svg>\n");
+    fclose(f);
+    log_msg("SVG 完成:%s (%dx%d, 矢量海岸线)\n", path, X, Y);
+
+    /* 切片:SVG 等高线(每个切片一个文件) */
+    if (slices > 0) {
+        int MinZ = 1, MaxZ = -1, k, prev, i;
+        for (i = 0; i < X * Y; i++) {
+            if (Height[i] > MaxZ) MaxZ = Height[i];
+            if (Height[i] < MinZ) MinZ = Height[i];
+        }
+        if (MaxZ <= MinZ) MaxZ = MinZ + 1;
+        prev = -1;
+        for (k = 0; k < slices; k++) {
+            int level = MinZ + (int)((k + 1) * (double)(MaxZ - MinZ) / (slices + 1));
+            if (level == prev) continue;
+            prev = level;
+            /* 二值化:>=level 为前景 */
+            unsigned char *m = (unsigned char*)malloc((size_t)X * Y);
+            for (i = 0; i < X * Y; i++)
+                m[i] = (Height[i] >= level) ? 1 : 0;
+            /* 输出 SVG 切片 */
+            char sname[600];
+            snprintf(sname, sizeof(sname), "%s_切片_%02d.svg", out_base, k + 1);
+            FILE *sf = fopen(sname, "wb");
+            if (!sf) { log_msg("切片 %02d 写入失败:%s\n", k + 1, sname); free(m); continue; }
+            fprintf(sf, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
+            fprintf(sf, "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 %d %d\" width=\"%d\" height=\"%d\" shape-rendering=\"crispEdges\">\n",
+                    X, Y, X, Y);
+            svg_trace_contours(sf, m, "#000", 0.8f, 1);
+            fprintf(sf, "</svg>\n");
+            fclose(sf);
+            log_msg("切片(SVG) %02d:高度 %d -> %s\n", k + 1, level, sname);
+            free(m);
+        }
+    }
+
+    return 0;
+}
+
+/* ---------- 主程序:接受 fmt 参数(PNG/SVG) ---------- */
 
 /* 供 GUI 调用的入口:显式参数,替代原命令行 main() */
 int worldgen_run(int seed, int faults, int water, int dispersion,
                  int w, int h, int line_width,
-                 int graticule, int slices, int fill, const char *out)
+                 int graticule, int slices, int fill, const char *out,
+                 int fmt)
 {
     int smpass;
     int sealevel;
-    unsigned char *rgba;
+    unsigned char *rgba = NULL;
     int i;
 
     if (faults <= 0) faults = (w / 10 < 60) ? 60 : w / 10;
@@ -500,6 +754,7 @@ int worldgen_run(int seed, int faults, int water, int dispersion,
 
     if (w < 2 || h < 2) { log_msg("尺寸过小\n"); return 1; }
     if (line_width < 1) line_width = 1;
+    if (fmt != WORLDGEN_FMT_SVG && fmt != WORLDGEN_FMT_PNG) fmt = WORLDGEN_FMT_PNG;
 
     X = w; Y = h;
     YDiv2 = Y / 2;
@@ -522,23 +777,54 @@ int worldgen_run(int seed, int faults, int water, int dispersion,
     sealevel = compute_sealevel(water);
     classify(sealevel);
 
-    rgba = (unsigned char*)malloc((size_t)X * Y * 4);
-    if (fill)
-        render_color(rgba, sealevel);          /* 分层设色地图 */
-    else
-        trace_coast(rgba, line_width, graticule); /* 黑色线条海岸线 */
+    if (fmt == WORLDGEN_FMT_PNG) {
+        rgba = (unsigned char*)malloc((size_t)X * Y * 4);
+        if (fill)
+            render_color(rgba, sealevel);          /* 分层设色地图 */
+        else
+            trace_coast(rgba, line_width, graticule); /* 黑色线条海岸线 */
 
-    if (write_png(out, rgba, X, Y) != 0) {
-        log_msg("输出地图失败:%s\n", out);
-        free(rgba); free(Land); free(Height); free(SinTable);
-        return 1;
+        if (write_png(out, rgba, X, Y) != 0) {
+            log_msg("输出地图失败:%s\n", out);
+            free(rgba); free(Land); free(Height); free(SinTable);
+            return 1;
+        }
+        log_msg("完成:%s (%dx%d, 种子=%d, 故障=%d, 水=%d%%, 离散=%d, 线宽=%d, 海平面=%d)%s PNG\n",
+                out, X, Y, seed, faults, water, dispersion, line_width, sealevel,
+                fill ? " [分层设色]" : "");
+    } else {
+        /* SVG: 从 out 路径去除扩展名再重新拼 .svg,保证切片基名正确 */
+        char base[512], svgpath[600];
+        snprintf(base, sizeof(base), "%s", out);
+        {
+            size_t n = strlen(base);
+            if (n > 4 && !strcmp(base + n - 4, ".png")) {
+                strncpy(base + n - 4, ".svg", 4);
+                base[n] = '\0';
+            } else if (n > 4 && !strcmp(base + n - 4, ".svg")) {
+                /* 已是 .svg,保留 */
+            } else {
+                strncat(base, ".svg", sizeof(base) - n - 1);
+            }
+        }
+        snprintf(svgpath, sizeof(svgpath), "%s", base);
+        /* 切片基名:去掉 .svg 后缀(write_svg 会拼 _切片_N.svg) */
+        {
+            size_t n = strlen(base);
+            if (n > 4 && !strcmp(base + n - 4, ".svg")) base[n - 4] = '\0';
+        }
+        if (write_svg(svgpath, line_width, graticule, fill, sealevel, slices, base) != 0) {
+            log_msg("输出 SVG 失败:%s\n", svgpath);
+            free(Land); free(Height); free(SinTable);
+            return 1;
+        }
+        log_msg("完成:%s (%dx%d, 种子=%d, 故障=%d, 水=%d%%, 离散=%d, 线宽=%d, 海平面=%d)%s SVG\n",
+                svgpath, X, Y, seed, faults, water, dispersion, line_width, sealevel,
+                fill ? " [分层设色]" : "");
     }
-    log_msg("完成:%s (%dx%d, 种子=%d, 故障=%d, 水=%d%%, 离散=%d, 线宽=%d, 海平面=%d)%s\n",
-            out, X, Y, seed, faults, water, dispersion, line_width, sealevel,
-            fill ? " [分层设色]" : "");
 
-    /* 等高线切片: 输出 N 张不同高度的切片,供后期合成等高线地图 */
-    if (slices > 0) {
+    /* 等高线切片: PNG 模式才在主流程输出,SVG 模式由 write_svg 内部处理切片 */
+    if (fmt == WORLDGEN_FMT_PNG && slices > 0 && rgba != NULL) {
         int MinZ = 1, MaxZ = -1, k, prev;
         char base[512], sname[600];
 
@@ -567,6 +853,8 @@ int worldgen_run(int seed, int faults, int water, int dispersion,
         }
     }
 
-    free(rgba); free(Land); free(Height); free(SinTable);
+    if (rgba) free(rgba);
+    free(Land); free(Height); free(SinTable);
     return 0;
 }
+

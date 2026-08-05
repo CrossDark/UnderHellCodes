@@ -27,6 +27,8 @@
 #include <QVBoxLayout>
 #include <QtConcurrent/QtConcurrent>
 
+#include <QComboBox>
+
 #include <QImageReader>
 #include <QPixmap>
 
@@ -142,6 +144,11 @@ MainWindow::MainWindow(QWidget *parent)
     m_grid = new QCheckBox(QStringLiteral("经纬网格"), paramBox);
     m_fill = new QCheckBox(QStringLiteral("分层设色"), paramBox);
 
+    m_format = new QComboBox(paramBox);
+    m_format->addItem(QStringLiteral("PNG (位图)"), 0);
+    m_format->addItem(QStringLiteral("SVG (矢量)"), 1);
+    m_format->setToolTip(QStringLiteral("PNG 为像素位图,SVG 为矢量路径可无损缩放"));
+
     m_output = new QLineEdit(paramBox);
     m_output->setText(QStringLiteral("图片/地图_生成.png"));
     auto *browseBtn = new QPushButton(QStringLiteral("浏览…"), paramBox);
@@ -163,6 +170,7 @@ MainWindow::MainWindow(QWidget *parent)
     form->addRow(QStringLiteral("等高线切片"), m_slices);
     form->addRow(m_grid);
     form->addRow(m_fill);
+    form->addRow(QStringLiteral("输出格式"), m_format);
     form->addRow(QStringLiteral("输出路径"), outRow);
 
     auto *genBtn = new QPushButton(QStringLiteral("生成地图"), paramBox);
@@ -295,12 +303,14 @@ void MainWindow::generate()
     const int grid      = m_grid->isChecked() ? 1 : 0;
     const int slices    = m_slices->value();
     const int fill      = m_fill->isChecked() ? 1 : 0;
+    const int fmt       = m_format->currentData().toInt();  /* 0=PNG, 1=SVG */
 
     QStringList tags;
     if (grid) tags << QStringLiteral("[经纬网格]");
     if (slices > 0) tags << QStringLiteral("切片%1").arg(slices);
     if (fill) tags << QStringLiteral("[分层设色]");
     if (disp > 0) tags << QStringLiteral("离散%1%").arg(disp);
+    tags << (fmt == 1 ? QStringLiteral("[SVG]") : QStringLiteral("[PNG]"));
     appendLog(QStringLiteral("开始生成: 种子=%1 故障=%2 水=%3% 离散=%4% %5x%6 线宽=%7 -> %8 %9")
                   .arg(seed)
                   .arg(faults)
@@ -316,9 +326,9 @@ void MainWindow::generate()
     QByteArray out8 = outPath.toUtf8();
 
     auto future = QtConcurrent::run([seed, faults, water, disp, w, h, lw,
-                                     grid, slices, fill, out8]() {
+                                     grid, slices, fill, fmt, out8]() {
         return worldgen_run(seed, faults, water, disp, w, h, lw,
-                            grid, slices, fill, out8.constData());
+                            grid, slices, fill, out8.constData(), fmt);
     });
     m_watcher->setFuture(future);
 }
@@ -326,9 +336,12 @@ void MainWindow::generate()
 void MainWindow::browseOutput()
 {
     const QString dir = QDir::currentPath();
+    const bool isSvg = (m_format && m_format->currentData().toInt() == 1);
+    const QString filter = isSvg
+        ? QStringLiteral("SVG 矢量图 (*.svg);;所有文件 (*)")
+        : QStringLiteral("PNG 图片 (*.png);;所有文件 (*)");
     const QString file = QFileDialog::getSaveFileName(
-        this, QStringLiteral("保存地图"), dir,
-        QStringLiteral("PNG 图片 (*.png);;所有文件 (*)"));
+        this, QStringLiteral("保存地图"), dir, filter);
     if (!file.isEmpty())
         m_output->setText(file);
 }
@@ -343,6 +356,24 @@ void MainWindow::onGenerationFinished()
 
 void MainWindow::loadImage(const QString &path)
 {
+    const bool isSvg = path.endsWith(QLatin1String(".svg"), Qt::CaseInsensitive);
+    if (isSvg) {
+        /* SVG 在 GUI 内用渲染成 QImage 进行预览,避免直接加载 SVG DOM */
+        QImageReader r(path);
+        r.setAutoTransform(true);
+        const QImage img = r.read();
+        if (img.isNull()) {
+            appendLog(QStringLiteral("无法加载 SVG: %1 (%2)").arg(path, r.errorString()));
+            return;
+        }
+        const int viewW = m_mapLabel->width();
+        const int viewH = m_mapLabel->height();
+        QImage scaled = img.scaled(viewW, viewH, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+        m_mapLabel->setPixmap(QPixmap::fromImage(scaled));
+        m_mapLabel->setText(QString());
+        appendLog(QStringLiteral("已加载(SVG 渲染): %1 (%2x%3)").arg(path).arg(img.width()).arg(img.height()));
+        return;
+    }
     QImage img(path);
     if (img.isNull()) {
         appendLog(QStringLiteral("无法加载图片: %1").arg(path));

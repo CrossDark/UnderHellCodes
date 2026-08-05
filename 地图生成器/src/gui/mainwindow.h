@@ -9,6 +9,7 @@ class QLineEdit;
 class QLabel;
 class QPlainTextEdit;
 class QPushButton;
+class QComboBox;
 
 /* 地图生成 GUI:worldgen 核心直接内嵌编译,可调整参数并预览地图 */
 class MainWindow : public QMainWindow
@@ -42,6 +43,7 @@ private:
     QSpinBox      *m_slices;
     QCheckBox     *m_grid;
     QCheckBox     *m_fill;
+    QComboBox     *m_format;   /* PNG / SVG */
     QLineEdit     *m_output;
     QLabel        *m_mapLabel;
     QPlainTextEdit *m_log;

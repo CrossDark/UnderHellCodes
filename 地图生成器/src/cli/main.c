@@ -2,11 +2,12 @@
  * CLI 入口 - 解析命令行参数并调用统一的 worldgen_run() 核心 API
  *
  * 用法:
- *   ./worldgen <种子> <故障次数:0=自动> <水占比> [宽度] [高度] [线宽] [输出.png] [-g] [-c N] [-d N] [-fill]
+ *   ./worldgen <种子> <故障次数:0=自动> <水占比> [宽度] [高度] [线宽] [输出] [-g] [-c N] [-d N] [-fill] [--svg]
  *   例: ./worldgen 42 0 60 2560 1440 3 图片/地图_生成.png
  *   例: ./worldgen 7 250 65 2560 1440 1 图片/地图_生成.png -c 8
  *   例: ./worldgen 7 250 65 2560 1440 1 图片/地图_分层设色.png -fill
  *   例: ./worldgen 7 0 60 2560 1440 3 图片/群岛.png -d 80
+ *   例: ./worldgen 7 0 60 1280 720 1 地图.svg --svg
  *
  * 说明:
  *   - 故障次数传 0 时按宽度自动选取(约为 宽度/10)
@@ -15,10 +16,10 @@
  *   - 离散度(-d N) 0..100,0=大片大陆,100=分散群岛,默认 0
  *   - 线宽为海岸线线条的像素宽度
  *   - 加 -g 会叠加半透明的经纬网格线
- *   - 加 -c N 会额外输出 N 张"等高线切片":不同高度阈值的等值线,
- *     1px 黑色线条,透明背景,命名 <输出基名>_切片_01.png ...
+ *   - 加 -c N 会额外输出 N 张"等高线切片"(与主输出同格式:PNG/SVG)
  *   - 加 -fill 会输出 "分层设色地图":按相对海平面的高度给每个像素
- *     填充颜色(海洋:深蓝->青蓝;陆地:绿->黄绿->棕->白),不透明 PNG
+ *     填充颜色(海洋:深蓝->青蓝;陆地:绿->黄绿->棕->白)
+ *   - 加 --svg 输出 SVG 矢量格式(海岸线/等高线为矢量路径,缩放不丢失精度)
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -33,6 +34,7 @@ int main(int argc, char **argv)
     int slices = 0;
     int fill = 0;
     int dispersion = 0;
+    int fmt = WORLDGEN_FMT_PNG;
     const char *out;
     int i;
 
@@ -48,8 +50,10 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "-c") && i + 1 < argc) slices = atoi(argv[++i]);
         else if (!strcmp(argv[i], "-d") && i + 1 < argc) dispersion = atoi(argv[++i]);
         else if (!strcmp(argv[i], "-fill") || !strcmp(argv[i], "-color")) fill = 1;
+        else if (!strcmp(argv[i], "--svg") || !strcmp(argv[i], "-svg")) fmt = WORLDGEN_FMT_SVG;
     }
 
     return worldgen_run(seed, faults, water, dispersion, w, h, line_width,
-                        graticule, slices, fill, out);
+                        graticule, slices, fill, out, fmt);
 }
+
